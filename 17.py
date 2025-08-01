@@ -172,7 +172,9 @@ class TcpSender:
             self.sock.connect((self.host, self.port))
             print(f"[TCP] 已连接 {self.host}:{self.port}")
         except Exception as e:
+            self.sock.close()
             print("[TCP] 连接失败:", e)
+            raise
         else:
             threading.Thread(target=self._recv_loop, daemon=True).start()
 
