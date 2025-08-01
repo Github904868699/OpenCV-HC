@@ -316,19 +316,26 @@ class MainWindow(QtWidgets.QWidget):
 
         # 布局分割: 控制面板 | 视频显示
         hbox = QtWidgets.QHBoxLayout(self)
-        self.ctrl_panel = QtWidgets.QFrame(); self.ctrl_panel.setFixedWidth(310)
-        hbox.addWidget(self.ctrl_panel)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        hbox.addWidget(splitter)
+
+        self.ctrl_panel = QtWidgets.QFrame(); self.ctrl_panel.setFixedWidth(320)
+        splitter.addWidget(self.ctrl_panel)
         video_panel = QtWidgets.QVBoxLayout()
 
         # 摄像头画面
         self.video_lbl = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter)
+        self.video_lbl.setObjectName("video_lbl")
         self.video_lbl.setMinimumSize(640, 480)
+        self.video_lbl.setStyleSheet("background:black;")
         video_panel.addWidget(self.video_lbl, 1)
 
         # CMD输出框
         self.cmd_output = QtWidgets.QTextEdit()
         self.cmd_output.setReadOnly(True)
         self.cmd_output.setFixedHeight(150)
+        self.cmd_output.setFontFamily("Consolas")
+        self.cmd_output.setStyleSheet("background:#111;color:#0f0;")
         video_panel.addWidget(self.cmd_output)
         # 重定向 print 输出到日志框
         logger = QTextEditLogger(self.cmd_output)
@@ -338,10 +345,18 @@ class MainWindow(QtWidgets.QWidget):
         # 把右侧整体加入主布局
         video_container = QtWidgets.QWidget()
         video_container.setLayout(video_panel)
-        hbox.addWidget(video_container, 1)
+        splitter.addWidget(video_container)
+        splitter.setStretchFactor(1, 1)
 
         self._init_controls()
         self.load_cmd_map()
+        self.setStyleSheet(
+            """
+            QGroupBox { font-weight: bold; border: 1px solid #777; margin-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
+            QLabel#video_lbl { background: black; }
+            """
+        )
 
         # 摄像头初始化
         self.capture = None
