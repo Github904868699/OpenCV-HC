@@ -1,20 +1,37 @@
 from __future__ import annotations
+
 import functools
+import json
+import math
+import socket
+import socketserver
+import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
-import sys
-import time
 
-import cv2
-import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtGui import QIcon
-import math
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - numpy missing
+    np = None
 
-import socket
-import json
-import socketserver, json, threading, time
+try:
+    from PyQt5 import QtCore, QtGui, QtWidgets
+    from PyQt5.QtGui import QIcon
+except Exception:  # pragma: no cover - PyQt5 missing
+    QtCore = QtGui = QtWidgets = None
+    QIcon = None
+
+try:  # OpenCV might be missing in some environments
+    import cv2
+except Exception:  # pragma: no cover - graceful fallback
+    cv2 = None
+
+if QtCore is None or np is None or cv2 is None:
+    print("Required dependencies are missing: PyQt5, NumPy or OpenCV.")
+    sys.exit(1)
 class HCRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         buf = b""
@@ -40,49 +57,10 @@ def start_server(host="0.0.0.0", port=9760, on_message=lambda x: None):
 
 class CamScanner(QtCore.QThread):
     resultReady = QtCore.pyqtSignal(list)
+
     def run(self):
         cams = list_camera_indices()
         self.resultReady.emit(cams)
-
-def start_heartbeat(self, interval=10):
-    def loop():
-        while True:
-            hb = {"dsID":"www.hc-system.com.cam", "reqType":"heartbreak"}
-            self._send_json(hb)
-            time.sleep(interval)
-    threading.Thread(target=loop, daemon=True).start()
-
-
-def send_position_data(self, cam_id:int, detections:list):
-    """
-    detections: List[dict] 里面至少含
-        ModelID, X, Y, Angel, Similarity, Color, Rel
-    """
-    frame = {"dsID":"www.hc-system.com.cam",
-             "dsData":[{"camID":str(cam_id), "data":detections}]}
-    self._send_json(frame)
-
-def handle_hc_cmd(self, text:str):
-    try:
-        cmd = json.loads(text)
-    except Exception as e:
-        print("[协议] 非法 JSON:", e); return
-
-    tp = cmd.get("reqType")
-    cam = int(cmd.get("camID", 0))
-
-    if tp == "photo":
-        # 触发一次拍照和识别；结果通过 send_position_data 发送
-        self.do_capture_and_send(cam)
-        # 立即回包确认
-        ack = {"dsID":"www.hc-system.com.cam", "reqType":"photo",
-               "camID":cam, "ret":1}
-        self._send_json(ack)
-    elif tp == "listModel":
-        self._send_json(self.build_model_list_reply())
-    elif tp == "changeModel":
-        self.current_model = (cmd["name"], cmd["model"])
-    # …根据协议再补充 setModelOffset / standardize 等分支
 
 
 # 辅助函数: 资源路径 (兼容 PyInstaller)
@@ -182,15 +160,41 @@ def list_camera_indices(max_index: int = 4,backend=cv2.CAP_MSMF) -> List[int]:
     return valid
 
 class TcpSender:
-    def __init__(self, host="127.0.0.1", port=6000):
+    """Simple TCP client with background receive loop."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 6000,
+                 on_recv=None):
         self.host = host
         self.port = port
+        self.on_recv = on_recv
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.sock.connect((self.host, self.port))
             print(f"[TCP] 已连接 {self.host}:{self.port}")
         except Exception as e:
             print("[TCP] 连接失败:", e)
+        else:
+            threading.Thread(target=self._recv_loop, daemon=True).start()
+
+    def _recv_loop(self):
+        buf = b""
+        while True:
+            try:
+                data = self.sock.recv(4096)
+                if not data:
+                    print("[TCP] 连接已关闭")
+                    break
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="ignore")
+                    if self.on_recv:
+                        self.on_recv(text)
+                    else:
+                        print("[TCP] 收到:", text)
+            except Exception as e:
+                print("[TCP] 接收失败:", e)
+                break
 
     def send_data(self, msg: str):
         try:
@@ -198,6 +202,14 @@ class TcpSender:
             print("[TCP] 已发送:", msg)
         except Exception as e:
             print("[TCP] 发送失败:", e)
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        finally:
+            self.sock.close()
 
 # 全局常量
 CHS = {"circle": "圆形","triangle": "三角形", "rect": "正方形"}
@@ -340,17 +352,7 @@ class MainWindow(QtWidgets.QWidget):
         self.timer.start(30)
         self.frame_cnt = 0
         self.svr = start_server(on_message=self.handle_hc_cmd)
-        # ===== 华成协议回调 =====
-        def _send_json(self, obj):
-            if not self.tcp_sender:
-                print("[TCP] 未连接"); return
-            self.tcp_sender.send_data(json.dumps(obj, ensure_ascii=False))
-
-        def handle_hc_cmd(self, text:str):
-            try:
-                cmd = json.loads(text)
-            except Exception as e:
-                print("[协议] 非法 JSON:", e); return
+        self._running = True
 
     # 异步摄像头扫描
     def start_scanning(self):
@@ -383,6 +385,98 @@ class MainWindow(QtWidgets.QWidget):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         print("[配置] 已保存服务器地址到 tcp.json")
+
+    def start_heartbeat(self, interval: int = 10):
+        if getattr(self, "_hb_thread", None):
+            return
+
+        def loop():
+            while self._running:
+                if self.tcp_sender:
+                    hb = {"dsID": "www.hc-system.com.cam", "reqType": "heartbeat"}
+                    self._send_json(hb)
+                time.sleep(interval)
+
+        self._hb_thread = threading.Thread(target=loop, daemon=True)
+        self._hb_thread.start()
+
+    def _send_json(self, obj):
+        if not self.tcp_sender:
+            print("[TCP] 未连接")
+            return
+        text = json.dumps(obj, ensure_ascii=False)
+        self.tcp_sender.send_data(text)
+        self.append_log(f"[发送] {text}")
+
+    def send_position_data(self, cam_id: int, detections: list):
+        frame = {
+            "dsID": "www.hc-system.com.cam",
+            "dsData": [{"camID": str(cam_id), "data": detections}],
+        }
+        self._send_json(frame)
+
+    def build_model_list_reply(self):
+        return {"dsID": "www.hc-system.com.cam", "models": []}
+
+    def do_capture_and_send(self, cam_id: int):
+        if not self.capture or not self.capture.isOpened():
+            print("[摄像头] 未就绪")
+            return
+        if cam_id != self.cam_combo.currentData():
+            print(f"[警告] 请求的相机 {cam_id} 与当前选择的不一致")
+        ok, frame = self.capture.read()
+        if not ok or frame is None or frame.size == 0:
+            print("[摄像头] 读取失败")
+            return
+
+        shapes_enabled = {
+            s for s, chk in [
+                ("circle", self.chk_circle),
+                ("triangle", self.chk_tri),
+                ("rect", self.chk_rect),
+            ]
+            if chk.isChecked()
+        }
+        labels = detect_shapes(frame, list(self.colors.values()), shapes_enabled)
+
+        if not labels:
+            print("[识别] 未检测到目标")
+        for text, _pos, _col in labels:
+            if text in self.cmd_map:
+                msg = self.cmd_map[text]
+                if self.tcp_sender:
+                    self.tcp_sender.send_data(msg)
+                    self.append_log(f"[发送] {text} -> {msg}")
+                else:
+                    print("[TCP] 未连接")
+            else:
+                print(f"[未配置] {text}")
+
+    def handle_hc_cmd(self, text: str):
+        self.append_log(f"[指令] {text}")
+        try:
+            cmd = json.loads(text)
+        except Exception as e:
+            print("[协议] 非法 JSON:", e)
+            return
+
+        tp = cmd.get("reqType")
+        cam = int(cmd.get("camID", 0))
+
+        if tp == "photo":
+            self.do_capture_and_send(cam)
+            ack = {
+                "dsID": "www.hc-system.com.cam",
+                "reqType": "photo",
+                "camID": cam,
+                "ret": 1,
+            }
+            self._send_json(ack)
+        elif tp == "listModel":
+            self._send_json(self.build_model_list_reply())
+        elif tp == "changeModel":
+            self.current_model = (cmd["name"], cmd["model"])
+        # 根据协议可继续扩展其它分支
 
     # ------------------- UI 构建 -------------------
     
@@ -447,12 +541,14 @@ class MainWindow(QtWidgets.QWidget):
         btn_layout = QtWidgets.QHBoxLayout()
         self.connect_btn = QtWidgets.QPushButton("连接TCP")
         self.send_btn = QtWidgets.QPushButton("测试发送")
+        self.recognize_btn = QtWidgets.QPushButton("识别")
         # 自动发送勾选框
         self.auto_send_chk = QtWidgets.QCheckBox("识别成功后自动发送")
         tcp_layout.addWidget(self.auto_send_chk)
 
         btn_layout.addWidget(self.connect_btn)
         btn_layout.addWidget(self.send_btn)
+        btn_layout.addWidget(self.recognize_btn)
         tcp_layout.addLayout(btn_layout)
 
         vbox.addWidget(tcp_group)
@@ -463,6 +559,9 @@ class MainWindow(QtWidgets.QWidget):
         # 按钮事件
         self.connect_btn.clicked.connect(self.connect_tcp)
         self.send_btn.clicked.connect(self.test_send)
+        self.recognize_btn.clicked.connect(
+            lambda: self.do_capture_and_send(self.cam_combo.currentData() or 0)
+        )
         vbox.addStretch(1)
     def append_log(self, msg: str):
         self.cmd_output.append(msg)
@@ -507,12 +606,13 @@ class MainWindow(QtWidgets.QWidget):
         cfg.lower[:] = [lh, ls, lv]
         cfg.upper[:] = [uh, us, uv]
     def connect_tcp(self):
-        ip   = self.ip_input.text().strip()
+        ip = self.ip_input.text().strip()
         port = int(self.port_input.text())
         try:
-            self.tcp_sender = TcpSender(ip, port)
+            self.tcp_sender = TcpSender(ip, port, on_recv=self.handle_tcp_msg)
             QtWidgets.QMessageBox.information(self, "成功", f"已连接 {ip}:{port}")
             self._save_server_config()
+            self.start_heartbeat()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "错误", f"连接失败: {e}")
 
@@ -549,6 +649,10 @@ class MainWindow(QtWidgets.QWidget):
             self.append_log(f"[测试发送] {msg}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "错误", f"发送失败: {e}")
+
+    def handle_tcp_msg(self, text: str):
+        """Callback for data received from the remote TCP server."""
+        self.append_log(f"[TCP 收到] {text}")
     # ------------------- 摄像头 -------------------
     def open_camera(self):
         idx = self.cam_combo.currentData()
@@ -576,8 +680,6 @@ class MainWindow(QtWidgets.QWidget):
             return
         ok, frame = self.capture.read()
         if not ok or frame is None or frame.size == 0:
-            return
-        if not ok:
             return
         self.frame_cnt += 1
         if self.frame_cnt % self.FPS_CALC_INTERVAL == 0:
@@ -627,9 +729,24 @@ class MainWindow(QtWidgets.QWidget):
     def closeEvent(self, e):
         if self.capture:
             self.capture.release(); self.capture = None
+        if self.svr:
+            try:
+                self.svr.shutdown()
+            except Exception:
+                pass
+        if self.tcp_sender:
+            self.tcp_sender.close()
+            self.tcp_sender = None
+        self._running = False
+        if getattr(self, "_hb_thread", None):
+            self._hb_thread.join(timeout=0)
+            self._hb_thread = None
         super().closeEvent(e)
 
 def main():
+    if cv2 is None or np is None or QtCore is None:
+        print("Required dependencies are missing: OpenCV, NumPy or PyQt5.")
+        return
     colors = load_colors("colors.json")
     app = QtWidgets.QApplication(sys.argv)
     app.setWindowIcon(QIcon(resource_path("Camera.ico")))

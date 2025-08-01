@@ -7,16 +7,17 @@
     "蓝色-圆形": "blue_circle",
     "蓝色-正方形": "blue_square",
     "蓝色-三角形": "blue_triangle",
-    "红色-圆形": "red_circle",
-    "红色-正方形": "red_square",
-    "红色-三角形": "red_triangle",
-    "黄色-圆形": "yellow_circle",
-    "黄色-正方形": "yellow_square",
     "黑色-圆形": "black_circle",
     "黑色-正方形": "black_square",
     "黑色-三角形": "black_triangle",
-    "绿色-圆形": "green_circle",
-    "绿色-正方形": "green_square",
-    "绿色-三角形": "green_triangle"
+    "白色-圆形": "white_circle",
+    "白色-正方形": "white_square",
+    "白色-三角形": "white_triangle",
+    "橙色-圆形": "orange_circle",
+    "橙色-正方形": "orange_square",
+    "橙色-三角形": "orange_triangle",
+    "金色-圆形": "gold_circle",
+    "金色-正方形": "gold_square",
+    "金色-三角形": "gold_triangle"
   }
 }
