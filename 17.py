@@ -143,15 +143,41 @@ def list_camera_indices(max_index: int = 4,backend=cv2.CAP_MSMF) -> List[int]:
     return valid
 
 class TcpSender:
-    def __init__(self, host="127.0.0.1", port=6000):
+    """Simple TCP client with background receive loop."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 6000,
+                 on_recv=None):
         self.host = host
         self.port = port
+        self.on_recv = on_recv
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.sock.connect((self.host, self.port))
             print(f"[TCP] 已连接 {self.host}:{self.port}")
         except Exception as e:
             print("[TCP] 连接失败:", e)
+        else:
+            threading.Thread(target=self._recv_loop, daemon=True).start()
+
+    def _recv_loop(self):
+        buf = b""
+        while True:
+            try:
+                data = self.sock.recv(4096)
+                if not data:
+                    print("[TCP] 连接已关闭")
+                    break
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="ignore")
+                    if self.on_recv:
+                        self.on_recv(text)
+                    else:
+                        print("[TCP] 收到:", text)
+            except Exception as e:
+                print("[TCP] 接收失败:", e)
+                break
 
     def send_data(self, msg: str):
         try:
@@ -159,6 +185,14 @@ class TcpSender:
             print("[TCP] 已发送:", msg)
         except Exception as e:
             print("[TCP] 发送失败:", e)
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        finally:
+            self.sock.close()
 
 # 全局常量
 CHS = {"circle": "圆形","triangle": "三角形", "rect": "正方形"}
@@ -348,7 +382,9 @@ class MainWindow(QtWidgets.QWidget):
         if not self.tcp_sender:
             print("[TCP] 未连接")
             return
-        self.tcp_sender.send_data(json.dumps(obj, ensure_ascii=False))
+        text = json.dumps(obj, ensure_ascii=False)
+        self.tcp_sender.send_data(text)
+        self.append_log(f"[发送] {text}")
 
     def send_position_data(self, cam_id: int, detections: list):
         frame = {
@@ -364,6 +400,7 @@ class MainWindow(QtWidgets.QWidget):
         print(f"[未实现] 捕获并发送 cam {cam_id}")
 
     def handle_hc_cmd(self, text: str):
+        self.append_log(f"[指令] {text}")
         try:
             cmd = json.loads(text)
         except Exception as e:
@@ -511,10 +548,10 @@ class MainWindow(QtWidgets.QWidget):
         cfg.lower[:] = [lh, ls, lv]
         cfg.upper[:] = [uh, us, uv]
     def connect_tcp(self):
-        ip   = self.ip_input.text().strip()
+        ip = self.ip_input.text().strip()
         port = int(self.port_input.text())
         try:
-            self.tcp_sender = TcpSender(ip, port)
+            self.tcp_sender = TcpSender(ip, port, on_recv=self.handle_tcp_msg)
             QtWidgets.QMessageBox.information(self, "成功", f"已连接 {ip}:{port}")
             self._save_server_config()
         except Exception as e:
@@ -553,6 +590,10 @@ class MainWindow(QtWidgets.QWidget):
             self.append_log(f"[测试发送] {msg}")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "错误", f"发送失败: {e}")
+
+    def handle_tcp_msg(self, text: str):
+        """Callback for data received from the remote TCP server."""
+        self.append_log(f"[TCP 收到] {text}")
     # ------------------- 摄像头 -------------------
     def open_camera(self):
         idx = self.cam_combo.currentData()
@@ -631,6 +672,14 @@ class MainWindow(QtWidgets.QWidget):
     def closeEvent(self, e):
         if self.capture:
             self.capture.release(); self.capture = None
+        if self.svr:
+            try:
+                self.svr.shutdown()
+            except Exception:
+                pass
+        if self.tcp_sender:
+            self.tcp_sender.close()
+            self.tcp_sender = None
         super().closeEvent(e)
 
 def main():
