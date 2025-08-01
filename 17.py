@@ -40,49 +40,10 @@ def start_server(host="0.0.0.0", port=9760, on_message=lambda x: None):
 
 class CamScanner(QtCore.QThread):
     resultReady = QtCore.pyqtSignal(list)
+
     def run(self):
         cams = list_camera_indices()
         self.resultReady.emit(cams)
-
-def start_heartbeat(self, interval=10):
-    def loop():
-        while True:
-            hb = {"dsID":"www.hc-system.com.cam", "reqType":"heartbreak"}
-            self._send_json(hb)
-            time.sleep(interval)
-    threading.Thread(target=loop, daemon=True).start()
-
-
-def send_position_data(self, cam_id:int, detections:list):
-    """
-    detections: List[dict] 里面至少含
-        ModelID, X, Y, Angel, Similarity, Color, Rel
-    """
-    frame = {"dsID":"www.hc-system.com.cam",
-             "dsData":[{"camID":str(cam_id), "data":detections}]}
-    self._send_json(frame)
-
-def handle_hc_cmd(self, text:str):
-    try:
-        cmd = json.loads(text)
-    except Exception as e:
-        print("[协议] 非法 JSON:", e); return
-
-    tp = cmd.get("reqType")
-    cam = int(cmd.get("camID", 0))
-
-    if tp == "photo":
-        # 触发一次拍照和识别；结果通过 send_position_data 发送
-        self.do_capture_and_send(cam)
-        # 立即回包确认
-        ack = {"dsID":"www.hc-system.com.cam", "reqType":"photo",
-               "camID":cam, "ret":1}
-        self._send_json(ack)
-    elif tp == "listModel":
-        self._send_json(self.build_model_list_reply())
-    elif tp == "changeModel":
-        self.current_model = (cmd["name"], cmd["model"])
-    # …根据协议再补充 setModelOffset / standardize 等分支
 
 
 # 辅助函数: 资源路径 (兼容 PyInstaller)
@@ -340,17 +301,7 @@ class MainWindow(QtWidgets.QWidget):
         self.timer.start(30)
         self.frame_cnt = 0
         self.svr = start_server(on_message=self.handle_hc_cmd)
-        # ===== 华成协议回调 =====
-        def _send_json(self, obj):
-            if not self.tcp_sender:
-                print("[TCP] 未连接"); return
-            self.tcp_sender.send_data(json.dumps(obj, ensure_ascii=False))
-
-        def handle_hc_cmd(self, text:str):
-            try:
-                cmd = json.loads(text)
-            except Exception as e:
-                print("[协议] 非法 JSON:", e); return
+        self.start_heartbeat()
 
     # 异步摄像头扫描
     def start_scanning(self):
@@ -383,6 +334,59 @@ class MainWindow(QtWidgets.QWidget):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         print("[配置] 已保存服务器地址到 tcp.json")
+
+    def start_heartbeat(self, interval: int = 10):
+        def loop():
+            while True:
+                hb = {"dsID": "www.hc-system.com.cam", "reqType": "heartbreak"}
+                self._send_json(hb)
+                time.sleep(interval)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def _send_json(self, obj):
+        if not self.tcp_sender:
+            print("[TCP] 未连接")
+            return
+        self.tcp_sender.send_data(json.dumps(obj, ensure_ascii=False))
+
+    def send_position_data(self, cam_id: int, detections: list):
+        frame = {
+            "dsID": "www.hc-system.com.cam",
+            "dsData": [{"camID": str(cam_id), "data": detections}],
+        }
+        self._send_json(frame)
+
+    def build_model_list_reply(self):
+        return {"dsID": "www.hc-system.com.cam", "models": []}
+
+    def do_capture_and_send(self, cam_id: int):
+        print(f"[未实现] 捕获并发送 cam {cam_id}")
+
+    def handle_hc_cmd(self, text: str):
+        try:
+            cmd = json.loads(text)
+        except Exception as e:
+            print("[协议] 非法 JSON:", e)
+            return
+
+        tp = cmd.get("reqType")
+        cam = int(cmd.get("camID", 0))
+
+        if tp == "photo":
+            self.do_capture_and_send(cam)
+            ack = {
+                "dsID": "www.hc-system.com.cam",
+                "reqType": "photo",
+                "camID": cam,
+                "ret": 1,
+            }
+            self._send_json(ack)
+        elif tp == "listModel":
+            self._send_json(self.build_model_list_reply())
+        elif tp == "changeModel":
+            self.current_model = (cmd["name"], cmd["model"])
+        # 根据协议可继续扩展其它分支
 
     # ------------------- UI 构建 -------------------
     
