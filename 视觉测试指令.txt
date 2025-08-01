@@ -1,0 +1,60 @@
+视觉发送点位例程：
+{
+"dsID" : "www.hc-system.com.cam" ,
+"reqType" : "AddPoints" ,
+"dsData" :
+[
+{
+"camID" : "0" ,
+"data" :
+[
+{"ModelID" : "0" ,
+"X" : "888.001" , "Y" : "1345.001" , "Z" : "1000.001" , "U" : "0.000" , "V" : "0.000" , "Angel" : "123.123" ,"Similarity" : "0" , "Color" : "0" , "Rel" : "0"} 
+]
+}
+]
+}
+
+查询X轴世界坐标
+{
+"dsID" : "www.hc-system.com.RemoteMonitor" , 
+"reqType" : "query" ,
+"packID" : "0" , 
+"queryAddr" : ["world-0"]
+}
+
+IO输出：y40输出
+{
+"dsID":"www.hc-system.com.RemoteMonitor",
+"reqType": "command",
+"packID": "0",
+"cmdData":["modifyOutput", "0","25","1"]
+}
+}
+
+IO输出：y41
+{
+"dsID":"www.hc-system.com.RemoteMonitor",
+"reqType": "command",
+"packID": "0",
+"cmdData":["modifyOutput", "0","26","1"]
+}
+}
+IO输出：y42
+{
+"dsID":"www.hc-system.com.RemoteMonitor",
+"reqType": "command",
+"packID": "0",
+"cmdData":["modifyOutput", "0","27","1"]
+}
+}
+解析：modifyOutput: 修改输出点状态: (“d1”: 输出板 ID（0〜3：IO 板，4〜6：M 值 (⼿控⽹⼝版本暂时不⽀
+持)，7：EUIO），“d2”: 输出点 ID，“d3”: 输出状态（0：OFF，1：ON）)
+
+模板
+{
+"dsID":"www.hc-system.com.RemoteMonitor",
+"reqType": "command",
+"packID": "0",
+"cmdData":["modifyOutput", "d1","d2","d3"]
+}
